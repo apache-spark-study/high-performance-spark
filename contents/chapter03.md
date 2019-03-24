@@ -183,17 +183,102 @@ scala> res46.collect()
 res47: Array[org.apache.spark.sql.Row] = Array([count,4,1,4,4], [mean,null,null,16.25,3250.0], [stddev,null,null,4.7871355387816905,2061.5528128088304], [min,store1,pen,10,1000], [max,store2,pen,20,5000])
 ```
 
-**윈도화**
+**윈도화**  
+윈도 함수는 행들의 범위나 윈도로 하는 작업을 더 쉽게 할 수 있도록 한다. 윈도 함수는 노이즈 데이터를 포함하는 평균 속도 계산, 상대적인 매출 계산 등에 매우 유용하게 쓰인다.  
+윈도 사양(WindowSpec)을 지정하고 나면 해당 윈도 위에서 함수를 지정해 연산을 할 수 있다.
 
-**정렬**
+```scala
+import org.apache.spark.sql.expressions.Window
 
-**다중 DataFrame 트랜스포메이션**
+Window.partitionBy(df("store")).orderBy(df("amount"))
+res0: org.apache.spark.sql.expressions.WindowSpec = org.apache.spark.sql.expressions.WindowSpec@2bba8eeb
 
-**유사 집합 연산**
+scala> df.withColumn("rank", rank().over(res0)).filter(expr("rank <= 1")).select("*").show()
++------+-------+------+-----+----+
+| store|product|amount|price|rank|
++------+-------+------+-----+----+
+|store2|    bag|    10| 5000|   1|
+|store1|   note|    15| 1000|   1|
++------+-------+------+-----+----+
+```
 
-**전통적인 SQL 질의/하이브 데이터와 상호 연동하기**
+**정렬**  
+```scala
+scala> df.orderBy(df("price").asc).show()
++------+-------+------+-----+
+| store|product|amount|price|
++------+-------+------+-----+
+|store1|   note|    15| 1000|
+|store2|   note|    20| 2000|
+|store2|    bag|    10| 5000|
+|store1|    pen|    20| 5000|
++------+-------+------+-----+
 
+scala> df.orderBy(df("price").asc).limit(2)
+res4: org.apache.spark.sql.Dataset[org.apache.spark.sql.Row] = [store: string, product: string ... 2 more fields]
+
+scala> res4.show()
++------+-------+------+-----+
+| store|product|amount|price|
++------+-------+------+-----+
+|store1|   note|    15| 1000|
+|store2|   note|    20| 2000|
++------+-------+------+-----+
+```
+
+### 다중 DataFrame 트랜스포메이션  
+
+**유사 집합 연산**  
+DataFrame의 유사 집합 연산(set-like operation)은 가장 흔하게 집합 연산으로 떠올릴 만한 여러 작업들을 처리해준다. e.g) 합집합, 교집합, 차집합.
+특히 unionAll의 경우는 갑들끼리의 비교가 필요 없기 때문에 비용이 가장 낮다.
+
+### 전통적인 SQL 질의/하이브 데이터와 상호 연동하기
+때때로 DataFrame에 연산식을 구축하는 것보다는 일반적인 SQL을 쓰는 것이 더 나을 때도 있다. 만약, 하이브 메타스토어에 연결이 되어 있다면 우리는 하이브 테이블을 대상으로 직접 SQL 질의를 작성해서 결과를 DataFrame으로 받을 수도 있다. 혹은 SQL 질의를 직접 작성하고 싶은 대상 DataFrame이 있다면 임시 테이블로 등록할 수도 있다.
+
+```scala
+scala> df.createOrReplaceTempView("test")
+
+scala> spark.sql("select * from test").show()
++------+-------+------+-----+
+| store|product|amount|price|
++------+-------+------+-----+
+|store2|   note|    20| 2000|
+|store2|    bag|    10| 5000|
+|store1|   note|    15| 1000|
+|store1|    pen|    20| 5000|
++------+-------+------+-----+
+```
+
+<br>
 
 ## DataFrame과 Dataset에서의 데이터 표현
+DataFrame이란 단순히 Row객체를 모아놓은 RDD 이상의 것이다. DataFrame/Dataset은 특화된 데이터 표현 방식과 칼럼 기반 캐시 포맷을 갖고 있다. 특화된 표현 방식은 공간 효율성이 뛰어날 뿐 아니라 크리오(Kryo) 직렬화보다 더 빠르게 인코딩이 가능하다.  
+RDD와 동일하게 DataFrame/Dataset은 일반적으로 lazy evaluation을 수행하며 종속성에 대한 계보를 구축한다. (DataFrame에서는 이를 논리적 계획(logical plan) 이라  부른다.)
 
 ### 텅스텐
+텅스텐은 Spark SQL의 새로운 컴포넌트이며 바이트 단위 레벨에서 직접 동작하면서 더 효과적인 스파크 연산을 제공한다. 캐시된 RDD와 DataFrame 사이에서도 크기 차이를 확인할 수 있다. 텅스텐은 스파크에 필요한 연산 형태에 따라 최적화된 특수한 메모리 데이터 구조, 향상된 코드 생성, 특화된 프로토콜을 포함하고 있다.  
+
+텅스텐의 데이터 표현 방식은 자바나 크리오 직렬화를 쓰는 것보다도 상당히 용량이 작다. 포맷만 더 콤팩트해진게 아니라 직렬화 소요 시간도 기본 직렬화보다 매우 빠르다.
+
+텅스텐은 Spark 1.5에서 기본으로 탑재되었고, default = true로 되어 있다. 심지어 텅스텐이 아니더라도 Spark SQL은 크리오 직렬화와 칼럼 기반 저장 포맷을 써서 저장 비용을 최소화할 수 있다.
+
+```scala
+import spark.implicits._
+import org.apache.spark.sql.functions._
+
+val d1 = ("store2", "note", 20, 2000)
+val d2 = ("store2", "bag", 10, 5000)
+val d3 = ("store1", "note", 15, 1000)
+val d4 = ("store1", "pen", 20, 5000)
+
+val data = Seq(d1, d2, d3,d4)
+val df = data.toDF("store", "product", "amount", "price")
+val rdd = df.rdd
+
+df.cache()
+df.count() // for caching
+
+rdd.cache()
+rdd.count() // for caching
+```
+
