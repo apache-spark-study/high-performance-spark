@@ -282,3 +282,6 @@ rdd.cache()
 rdd.count() // for caching
 ```
 
+![spark-history-cache](spark-history-cache.png)
+
+
